@@ -40,6 +40,33 @@
     touch-action:manipulation;
   }
   #fsbtn:hover, #fsbtn:active { opacity:1; border-color:#8ef0ff; }
+  #mutebtn {
+    position:fixed; top:12px; right:62px; z-index:20;
+    width:42px; height:42px;
+    background:linear-gradient(180deg,#3d3654 0%,#2b2640 100%);
+    border:2px solid #4d4468;
+    border-radius:8px;
+    color:#8ef0ff; font-size:17px; line-height:1;
+    cursor:pointer;
+    opacity:.65;
+    -webkit-tap-highlight-color:transparent;
+    touch-action:manipulation;
+  }
+  #mutebtn:hover, #mutebtn:active { opacity:1; border-color:#8ef0ff; }
+  #menubtn {
+    position:fixed; top:12px; right:112px; z-index:20;
+    width:42px; height:42px;
+    background:linear-gradient(180deg,#3d3654 0%,#2b2640 100%);
+    border:2px solid #4d4468;
+    border-radius:8px;
+    color:#ffd93d; font-size:19px; line-height:1;
+    cursor:pointer;
+    opacity:.65;
+    display:none; /* only visible during gameplay */
+    -webkit-tap-highlight-color:transparent;
+    touch-action:manipulation;
+  }
+  #menubtn:hover, #menubtn:active { opacity:1; border-color:#ffd93d; }
   /* virtual joystick (mobile mode) */
   #joy {
     position:fixed; left:0; bottom:0;
@@ -85,6 +112,8 @@
 <body>
 <div id="wrap"><canvas id="game"></canvas></div>
 <button id="fsbtn" title="Fullscreen (F)">⛶</button>
+<button id="mutebtn" title="Mute (M)">🔊</button>
+<button id="menubtn" title="Menu (ESC)">☰</button>
 <div id="joy">
   <div id="joy-base"><div id="joy-knob"></div></div>
 </div>
@@ -139,6 +168,17 @@ const fsBtn=document.getElementById("fsbtn");
 function updateFsBtn(){ fsBtn.textContent = isFullscreen()? "✕" : "⛶"; }
 fsBtn.addEventListener("pointerdown", e=>{ e.stopPropagation(); });
 fsBtn.addEventListener("click", e=>{ e.stopPropagation(); toggleFullscreen(); });
+const muteBtn=document.getElementById("mutebtn");
+function updateMuteBtn(){ muteBtn.textContent = AudioSys.isMuted()? "🔇" : "🔊"; }
+muteBtn.addEventListener("pointerdown", e=>{ e.stopPropagation(); });
+muteBtn.addEventListener("click", e=>{ e.stopPropagation(); AudioSys.unlock(); AudioSys.toggleMute(); updateMuteBtn(); });
+const menuBtn=document.getElementById("menubtn");
+menuBtn.addEventListener("pointerdown", e=>{ e.stopPropagation(); });
+menuBtn.addEventListener("click", e=>{
+  e.stopPropagation();
+  if(game.state==="play") openPause();
+  else if(game.state==="pause"){ game.state="play"; SFX.select(); }
+});
 
 /* --- sharp text layer --- */
 const FONT = '"Press Start 2P","Courier New",monospace';
@@ -161,18 +201,140 @@ function flip(tq){
   for(const t of tq) drawTextItem(t);
 }
 
+/* ---------------- AUDIO: chiptune engine (Web Audio, no files) ---------------- */
+const AudioSys = (()=>{
+  let ac=null, sfxGain=null, musGain=null, started=false;
+  let musicTimer=null, songPos=0, currentSong=null;
+  let muted=false;
+
+  function init(){
+    if(ac) return;
+    ac = new (window.AudioContext||window.webkitAudioContext)();
+    sfxGain=ac.createGain(); sfxGain.gain.value=0.5; sfxGain.connect(ac.destination);
+    musGain=ac.createGain(); musGain.gain.value=0.32; musGain.connect(ac.destination);
+  }
+  function unlock(){ init(); if(ac.state==="suspended") ac.resume(); started=true; }
+
+  /* --- tiny synth voice --- */
+  function tone({freq=440,type="square",dur=0.15,vol=0.5,slide=0,delay=0,dest,attack=0.005,noise=false}){
+    if(!ac||muted) return;
+    const t0=ac.currentTime+delay;
+    const g=ac.createGain();
+    g.gain.setValueAtTime(0,t0);
+    g.gain.linearRampToValueAtTime(vol,t0+attack);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    g.connect(dest||sfxGain);
+    if(noise){
+      const len=Math.ceil(ac.sampleRate*dur);
+      const buf=ac.createBuffer(1,len,ac.sampleRate);
+      const d=buf.getChannelData(0);
+      for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+      const src=ac.createBufferSource(); src.buffer=buf;
+      const f=ac.createBiquadFilter(); f.type="bandpass"; f.frequency.value=freq; f.Q.value=1.2;
+      src.connect(f); f.connect(g);
+      src.start(t0); src.stop(t0+dur);
+    } else {
+      const o=ac.createOscillator();
+      o.type=type; o.frequency.setValueAtTime(freq,t0);
+      if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(20,freq+slide),t0+dur);
+      o.connect(g);
+      o.start(t0); o.stop(t0+dur+0.02);
+    }
+  }
+
+  /* --- sound effects --- */
+  const SFX = {
+    pickup(){ tone({freq:660,dur:0.08,vol:0.4}); tone({freq:880,dur:0.10,vol:0.4,delay:0.07}); tone({freq:1320,dur:0.12,vol:0.3,delay:0.14}); },
+    heart(){ tone({freq:523,type:"triangle",dur:0.1,vol:0.5}); tone({freq:659,type:"triangle",dur:0.1,vol:0.5,delay:0.09}); tone({freq:784,type:"triangle",dur:0.18,vol:0.5,delay:0.18}); tone({freq:1046,type:"triangle",dur:0.22,vol:0.4,delay:0.27}); },
+    hurt(){ tone({freq:220,type:"sawtooth",dur:0.22,vol:0.55,slide:-140}); tone({freq:900,noise:true,dur:0.15,vol:0.35}); },
+    stairsOpen(){ [392,494,587,784].forEach((f,i)=>tone({freq:f,type:"triangle",dur:0.25,vol:0.4,delay:i*0.1})); },
+    floorClear(){ [523,659,784,1046,1318].forEach((f,i)=>tone({freq:f,dur:0.16,vol:0.4,delay:i*0.09})); },
+    gameover(){ [440,392,330,262,196].forEach((f,i)=>tone({freq:f,type:"sawtooth",dur:0.3,vol:0.4,delay:i*0.18,slide:-30})); },
+    win(){ [523,659,784,1046,784,1046,1318,1568].forEach((f,i)=>tone({freq:f,dur:0.18,vol:0.42,delay:i*0.11})); },
+    select(){ tone({freq:880,dur:0.06,vol:0.35}); tone({freq:1174,dur:0.08,vol:0.3,delay:0.05}); },
+    alert(){ tone({freq:1200,type:"square",dur:0.07,vol:0.22}); tone({freq:1600,dur:0.07,vol:0.18,delay:0.06}); },
+    step(){ tone({freq:180,noise:true,dur:0.045,vol:0.10}); },
+  };
+
+  /* --- music: sequenced chiptune loops --- */
+  const N={C2:65,D2:73,E2:82,F2:87,G2:98,A2:110,Bb2:117,B2:123,
+           C3:131,D3:147,E3:165,F3:175,G3:196,A3:220,B3:247,
+           C4:262,D4:294,E4:330,F4:349,G4:392,A4:440,Bb4:466,B4:494,
+           C5:523,D5:587,E5:659,F5:698,G5:784,A5:880};
+  /* dungeon theme: moody minor groove */
+  const dungeonSong={
+    bpm:112, steps:32,
+    bass:[N.A2,0,N.A2,0, N.C3,0,N.A2,0, N.F3,0,N.F3,0, N.E3,0,N.E3,0,
+          N.A2,0,N.A2,0, N.C3,0,N.A2,0, N.D3,0,N.F3,0, N.E3,0,N.B2,0],
+    lead:[N.A4,0,0,N.C5, 0,N.B4,N.A4,0, N.F4,0,N.A4,0, N.E4,0,0,0,
+          N.A4,0,0,N.C5, 0,N.D5,N.E5,0, N.D5,0,N.C5,N.B4, N.A4,0,0,0],
+    hat:  [1,0,1,0, 1,0,1,1, 1,0,1,0, 1,0,1,1, 1,0,1,0, 1,0,1,1, 1,0,1,0, 1,1,1,1],
+  };
+  /* menu theme: lighter, hopeful */
+  const menuSong={
+    bpm:96, steps:32,
+    bass:[N.C3,0,0,0, N.G2,0,0,0, N.A2,0,0,0, N.F3,0,0,0,
+          N.C3,0,0,0, N.G2,0,0,0, N.F3,0,N.G3,0, N.C3,0,0,0],
+    lead:[N.E5,0,N.D5,0, N.C5,0,N.G4,0, N.A4,N.C5,0,0, N.F4,0,N.A4,0,
+          N.G4,0,N.C5,0, N.E5,0,N.D5,N.C5, N.D5,0,N.B4,0, N.C5,0,0,0],
+    hat:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,1,0, 1,0,0,0],
+  };
+
+  function playStep(song){
+    const b=song.bass[songPos], l=song.lead[songPos], h=song.hat[songPos];
+    const stepDur=60/song.bpm/2;
+    if(b) tone({freq:b,type:"triangle",dur:stepDur*1.8,vol:0.5,dest:musGain});
+    if(l) tone({freq:l,type:"square",dur:stepDur*1.1,vol:0.16,dest:musGain});
+    if(h) tone({freq:6000,noise:true,dur:0.03,vol:0.05,dest:musGain});
+    songPos=(songPos+1)%song.steps;
+  }
+  function playMusic(name){
+    if(!ac) return;
+    const song = name==="dungeon"? dungeonSong : name==="menu"? menuSong : null;
+    if(currentSong===song) return;
+    stopMusic();
+    currentSong=song;
+    if(!song) return;
+    songPos=0;
+    const stepMs=60000/song.bpm/2;
+    musicTimer=setInterval(()=>{ if(!muted && ac.state==="running") playStep(song); }, stepMs);
+  }
+  function stopMusic(){ if(musicTimer){ clearInterval(musicTimer); musicTimer=null; } currentSong=null; }
+  function toggleMute(){ muted=!muted; return muted; }
+  function isMuted(){ return muted; }
+
+  return {unlock, SFX, playMusic, stopMusic, toggleMute, isMuted, get started(){return started;}};
+})();
+const SFX=AudioSys.SFX;
+
 /* ---------------- RNG ---------------- */
 let seed = Date.now()%100000;
 function rnd(){ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; }
 function ri(a,b){ return a+Math.floor(rnd()*(b-a+1)); }
 
 /* ---------------- INPUT ---------------- */
+/* unlock audio on the first user interaction (browser requirement) */
+function audioUnlockOnce(){ AudioSys.unlock(); }
+addEventListener("keydown", audioUnlockOnce, {once:true});
+addEventListener("pointerdown", audioUnlockOnce, {once:true});
+
 const keys = {};
 addEventListener("keydown", e=>{
   const k=e.key.toLowerCase();
   keys[k]=true;
   if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
+  // name entry: typing has priority over F/M shortcuts
+  if(game.state==="name"){
+    if(k.length===1 && NAME_CHARS.includes(k.toUpperCase())){
+      if(playerName.length<8){ playerName+=k.toUpperCase(); SFX.select(); }
+    }
+    else if(k==="backspace"){ playerName=playerName.slice(0,-1); SFX.select(); }
+    else if(k==="enter"){ confirmName(); }
+    e.preventDefault();
+    return;
+  }
   if(k==="f"){ toggleFullscreen(); return; }
+  if(k==="m"){ AudioSys.unlock(); AudioSys.toggleMute(); updateMuteBtn(); return; }
   if(game.state==="device"){
     if(["arrowleft","arrowright","arrowup","arrowdown","a","d","w","s","tab"].includes(k)){ deviceSel=1-deviceSel; e.preventDefault(); }
     if(k==="1"){ applyDeviceMode("pc"); }
@@ -187,15 +349,47 @@ addEventListener("keydown", e=>{
     if(k===" "||k==="enter") startGame(modeSel===0?"normal":"endless");
     return;
   }
+  if(k==="l" && (game.state==="title"||game.state==="mode")){ lastRank=-1; game.state="board"; SFX.select(); return; }
+  if(k==="escape"){
+    if(game.state==="play") openPause();
+    else if(game.state==="pause") { game.state="play"; SFX.select(); }
+    return;
+  }
+  if(game.state==="pause"){
+    if(k==="arrowup"||k==="w"){ pauseSel=(pauseSel+PAUSE_ITEMS.length-1)%PAUSE_ITEMS.length; SFX.select(); }
+    else if(k==="arrowdown"||k==="s"){ pauseSel=(pauseSel+1)%PAUSE_ITEMS.length; SFX.select(); }
+    else if(k===" "||k==="enter"){ pauseAction(pauseSel); }
+    return;
+  }
   if(game.state!=="play" && (k===" "||k==="enter")) advance();
 });
 addEventListener("keyup", e=>keys[e.key.toLowerCase()]=false);
+/* on-screen keyboard layout for the name screen (canvas coords) */
+const KB = { x0:20, y0:104, kw:28, kh:24, rows:4, cols:10 };
+function nameKeyAt(px,py){
+  // returns a char, "DEL", "OK", or null
+  const c=Math.floor((px-KB.x0)/KB.kw), r=Math.floor((py-KB.y0)/KB.kh);
+  if(r<0||r>=KB.rows||c<0||c>=KB.cols) return null;
+  const i=r*KB.cols+c;
+  if(i<36) return NAME_CHARS[i];
+  if(i===36||i===37) return "DEL";
+  return "OK";
+}
+
 /* map a click/tap to internal canvas coordinates */
 function canvasPos(e){
   const r=canvas.getBoundingClientRect();
   return { x:(e.clientX-r.left)/r.width*VIEW_W, y:(e.clientY-r.top)/r.height*VIEW_H };
 }
 canvas.addEventListener("pointerdown", e=>{
+  if(game.state==="name"){
+    const p=canvasPos(e);
+    const key=nameKeyAt(p.x,p.y);
+    if(key==="OK"){ confirmName(); }
+    else if(key==="DEL"){ playerName=playerName.slice(0,-1); SFX.select(); }
+    else if(key){ if(playerName.length<8){ playerName+=key; SFX.select(); } }
+    return;
+  }
   if(game.state==="device"){
     const p=canvasPos(e);
     // generous hit zones: left half = PC, right half = MOBILE (in the box band)
@@ -212,6 +406,23 @@ canvas.addEventListener("pointerdown", e=>{
       else startGame("endless");
     } else { modeSel=1-modeSel; }
     return;
+  }
+  if(game.state==="title"){
+    const p=canvasPos(e);
+    if(p.y<40 && p.x>VIEW_W-90){ lastRank=-1; game.state="board"; SFX.select(); return; }
+    advance(); return;
+  }
+  if(game.state==="pause"){
+    const p=canvasPos(e);
+    // menu item boxes: centered, starting y=96, 26px apart, 160 wide
+    for(let i=0;i<PAUSE_ITEMS.length;i++){
+      const iy=96+i*28;
+      if(p.x>80 && p.x<240 && p.y>iy-12 && p.y<iy+12){ pauseAction(i); return; }
+    }
+    return;
+  }
+  if(game.state==="board" && game.fromPause){
+    game.fromPause=false; game.state="pause"; SFX.select(); return;
   }
   if(game.state!=="play") advance();
 });
@@ -841,34 +1052,70 @@ function bfsMap(g, sx, sy){
 /* ---------------- GAME STATE ---------------- */
 const MAX_FLOOR = 8;
 const game = {
-  state:"device",   // device | title | mode | play | floorclear | gameover | win
+  state:"device",   // device | name | title | mode | play | pause | floorclear | gameover | win | board
   mode:"normal",    // normal | endless
   floor:1, score:0, hp:3, maxHp:3,
   timeOnFloor:0,
 };
 let modeSel = 0;
+/* pause menu */
+let pauseSel = 0;
+const PAUSE_ITEMS = ["RESUME","RESTART RUN","LEADERBOARD","QUIT TO TITLE"];
+function openPause(){ if(game.state==="play"){ game.state="pause"; pauseSel=0; SFX.select(); } }
+function pauseAction(i){
+  SFX.select();
+  if(i===0){ game.state="play"; }                                    // resume
+  else if(i===1){ startGame(game.mode); }                            // restart run
+  else if(i===2){ lastRank=-1; game.fromPause=true; game.state="board"; } // leaderboard
+  else if(i===3){ game.state="title"; }                              // quit
+}
+/* player name (saved in browser) */
+let playerName = "";
+try{ playerName = (localStorage.getItem("veggie-name")||"").slice(0,8); }catch(e){}
+const NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+function confirmName(){
+  if(!playerName) playerName="HERO";
+  try{ localStorage.setItem("veggie-name",playerName); }catch(e){}
+  SFX.select();
+  game.state="title";
+}
 /* endless best records (saved in browser) */
-let best = {floor:0, score:0};
-try{ const b=JSON.parse(localStorage.getItem("veggie-best")||"{}"); best.floor=b.floor||0; best.score=b.score||0; }catch(e){}
+let best = {floor:0, score:0, name:""};
+try{ const b=JSON.parse(localStorage.getItem("veggie-best")||"{}"); best.floor=b.floor||0; best.score=b.score||0; best.name=b.name||""; }catch(e){}
 function saveBest(){
   let changed=false;
   if(game.floor>best.floor){ best.floor=game.floor; changed=true; }
   if(game.score>best.score){ best.score=game.score; changed=true; }
-  if(changed){ try{ localStorage.setItem("veggie-best",JSON.stringify(best)); }catch(e){} }
+  if(changed){ best.name=playerName; try{ localStorage.setItem("veggie-best",JSON.stringify(best)); }catch(e){} }
   return changed;
+}
+/* ---- leaderboard: top 10 highest scores (saved in browser) ---- */
+let leaderboard = [];
+try{ leaderboard = JSON.parse(localStorage.getItem("veggie-lb")||"[]"); if(!Array.isArray(leaderboard)) leaderboard=[]; }catch(e){}
+let lastRank = -1;   // rank of the most recent run (for highlight), -1 = not placed
+function addToLeaderboard(){
+  const entry={ name:playerName||"HERO", score:game.score, floor:game.floor,
+                mode:game.mode, win:(game.state==="win") };
+  leaderboard.push(entry);
+  leaderboard.sort((a,b)=> b.score-a.score || b.floor-a.floor);
+  lastRank = leaderboard.indexOf(entry);
+  if(lastRank>=10){ lastRank=-1; }
+  leaderboard = leaderboard.slice(0,10);
+  try{ localStorage.setItem("veggie-lb",JSON.stringify(leaderboard)); }catch(e){}
 }
 /* device mode: "pc" hides on-screen buttons, "mobile" shows them */
 let deviceMode = null;
 let deviceSel = (matchMedia("(pointer:coarse)").matches || "ontouchstart" in window) ? 1 : 0; // auto-detect highlight
 function applyDeviceMode(mode){
   deviceMode = mode;
+  SFX.select();
   document.body.classList.remove("pc-mode","mobile-mode");
   document.body.classList.add(mode==="mobile" ? "mobile-mode" : "pc-mode");
   joyEl.style.display = (mode==="mobile") ? "block" : "none";
   joyReset(); // never leave stale joystick input behind
   // mobile: jump straight into fullscreen (we're inside a user gesture here)
   if(mode==="mobile" && !isFullscreen()) enterFullscreen();
-  game.state = "title";
+  game.state = "name";
 }
 let maze, mazeW, mazeH;
 let player, enemies, pickups, stairs, particles, floats;
@@ -982,15 +1229,21 @@ function startFloor(n){
 function startGame(mode){
   game.mode=mode; game.state="play";
   game.score=0; game.hp=game.maxHp=3;
+  SFX.select();
   startFloor(1);
 }
 function advance(){
-  if(game.state==="title"){ game.state="mode"; }
+  if(game.state==="title"){ game.state="mode"; SFX.select(); }
   else if(game.state==="floorclear"){
-    if(game.mode==="normal" && game.floor>=MAX_FLOOR){ game.state="win"; saveBest(); }
+    if(game.mode==="normal" && game.floor>=MAX_FLOOR){ game.state="win"; SFX.win(); saveBest(); addToLeaderboard(); }
     else { game.state="play"; startFloor(game.floor+1); }
   }
-  else if(game.state==="gameover"||game.state==="win"){ game.state="title"; }
+  else if(game.state==="gameover"||game.state==="win"){ game.state="board"; SFX.select(); }
+  else if(game.state==="board"){
+    if(game.fromPause){ game.fromPause=false; game.state="pause"; }
+    else game.state="title";
+    SFX.select();
+  }
 }
 
 /* ---------------- COLLISION ---------------- */
@@ -1045,7 +1298,10 @@ function update(){
   player.moving = (dx!==0||dy!==0);
   if(dx<0) player.dir=-1; else if(dx>0) player.dir=1;
   moveBody(player, dx*spd, dy*spd, 5);
-  if(player.moving) player.anim+=0.18;
+  if(player.moving){
+    player.anim+=0.18;
+    if(frame%14===0) SFX.step();
+  }
   if(invuln>0) invuln--;
 
   // refresh BFS from player every 20 frames (for enemy chase)
@@ -1066,6 +1322,7 @@ function update(){
       game.score+=50;
       burst(px,py,"#8ef0ff",12);
       floatText(px,py-8,"+50","#8ef0ff");
+      SFX.pickup();
     }
   }
   /* --- hidden hearts --- */
@@ -1081,6 +1338,7 @@ function update(){
       particles.push({x:hx+(rnd()-0.5)*8,y:hy+(rnd()-0.5)*8,vx:0,vy:-0.25,life:16,color:"#ff7ab5"});
     if(d2p<10){
       hh.got=true;
+      SFX.heart();
       if(game.hp<game.maxHp){
         game.hp++;
         burst(hx,hy,"#e8433f",14);
@@ -1097,6 +1355,7 @@ function update(){
     stairs.open=true;
     burst((stairs.tx+0.5)*TILE,(stairs.ty+0.5)*TILE,"#37b6d4",20);
     floatText((stairs.tx+0.5)*TILE,(stairs.ty+0.5)*TILE-10,"STAIRS OPEN!","#8ef0ff");
+    SFX.stairsOpen();
   }
   stairs.pulse+=0.1;
 
@@ -1114,6 +1373,7 @@ function update(){
       }
       if(game.mode==="endless") saveBest();
       game.state="floorclear";
+      SFX.floorClear();
       return;
     }
   }
@@ -1126,7 +1386,7 @@ function update(){
     const d = playerDist[ety] ? playerDist[ety][etx] : 999;
 
     // state: chase if close enough (through maze distance)
-    if(d>=0 && d<=e.sight){ e.state="chase"; e.alert=90; }
+    if(d>=0 && d<=e.sight){ if(e.state!=="chase"){ SFX.alert(); } e.state="chase"; e.alert=90; }
     else if(e.alert>0){ e.alert--; if(e.alert===0) e.state="wander"; }
 
     let tx,ty;
@@ -1165,10 +1425,11 @@ function update(){
       game.hp--; invuln=100; shake=10;
       burst(player.x,player.y,"#e8433f",16);
       floatText(player.x,player.y-10,"OUCH!","#ff6b6b");
+      SFX.hurt();
       // knockback
       const kx=player.x-e.x, ky=player.y-e.y, kl=Math.hypot(kx,ky)||1;
       for(let i=0;i<8;i++) moveBody(player,kx/kl*2,ky/kl*2,5);
-      if(game.hp<=0){ game.state="gameover"; if(game.mode==="endless") game.newBest=saveBest(); return; }
+      if(game.hp<=0){ game.state="gameover"; SFX.gameover(); if(game.mode==="endless") game.newBest=saveBest(); addToLeaderboard(); return; }
     }
   }
 
@@ -1213,6 +1474,8 @@ function render(){
   ctx.fillStyle="#0d0b14"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
 
   if(game.state==="device"){ renderDevice(tq); flip(tq); return; }
+  if(game.state==="name"){ renderName(tq); flip(tq); return; }
+  if(game.state==="board"){ renderBoard(tq); flip(tq); return; }
   if(game.state==="title"){ renderTitle(tq); flip(tq); return; }
   if(game.state==="mode"){ renderMode(tq); flip(tq); return; }
 
@@ -1392,15 +1655,37 @@ function render(){
     overlay(tq, last? "DUNGEON ESCAPED!" : `FLOOR ${game.floor} CLEAR!`, extras);
   }
   if(game.state==="gameover"){
-    const lines=[`You reached floor ${game.floor}`, `Score: ${game.score}`];
+    const lines=[`${playerName||"HERO"} reached floor ${game.floor}`, `Score: ${game.score}`];
     if(game.mode==="endless"){
-      lines.push(game.newBest? "NEW BEST!" : `Best: floor ${best.floor} / ${best.score} pts`);
+      lines.push(game.newBest? "NEW BEST!" : `Best: ${best.name||"???"} — floor ${best.floor} / ${best.score} pts`);
     }
-    lines.push("", "Press SPACE to retry");
+    lines.push("", "SPACE: see leaderboard");
     overlay(tq, "EATEN BY JUNK FOOD!", lines);
   }
   if(game.state==="win") overlay(tq, "* YOU ESCAPED! *",
-    ["The veggies are safe.", `Final score: ${game.score}`, "", "Press SPACE"]);
+    [`${playerName||"HERO"} saved the veggies!`, `Final score: ${game.score}`, "", "SPACE: see leaderboard"]);
+
+  if(game.state==="pause"){
+    ctx.fillStyle="rgba(10,8,18,.85)"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+    tq.push({str:"|| PAUSED", x:VIEW_W/2, y:56, size:11, color:"#ffd93d"});
+    tq.push({str:`${playerName||"HERO"} — Floor ${game.floor} — ${game.score} pts`, x:VIEW_W/2, y:74, size:6, color:"#9a94b8"});
+    for(let i=0;i<PAUSE_ITEMS.length;i++){
+      const iy=96+i*28;
+      const sel=(i===pauseSel);
+      // item panel
+      ctx.fillStyle= sel? "#2e2745" : "#1e1a2e";
+      ctx.fillRect(80,iy-12,160,24);
+      ctx.fillStyle= sel? "#6ee74f" : "#3d3654";
+      ctx.fillRect(80,iy-12,160,2); ctx.fillRect(80,iy+10,160,2);
+      ctx.fillRect(80,iy-12,2,24); ctx.fillRect(238,iy-12,2,24);
+      if(sel && frame%40<25){
+        ctx.fillStyle="#8ef77a";
+        ctx.fillRect(72,iy-3,4,6); ctx.fillRect(244,iy-3,4,6);
+      }
+      tq.push({str:PAUSE_ITEMS[i], x:VIEW_W/2, y:iy+3, size:7, color: sel? "#6ee74f":"#cfcfe8"});
+    }
+    tq.push({str:"ESC or the corner button to resume", x:VIEW_W/2, y:224, size:5, color:"#7a7494"});
+  }
 
   flip(tq);
 }
@@ -1490,6 +1775,92 @@ function renderDevice(tq){
     tq.push({str:"(auto-detected: "+(deviceSel===1?"MOBILE":"PC")+")", x:VIEW_W/2, y:234, size:5, color:"#7a7494"});
 }
 
+/* --- name registration screen --- */
+function renderName(tq){
+  for(let y=0;y<VIEW_H/TILE+1;y++)for(let x=0;x<VIEW_W/TILE+1;x++)
+    ctx.drawImage(FLOOR_VARS[hash2(x+3,y+11)%6],x*TILE,y*TILE);
+  ctx.fillStyle="rgba(8,6,16,.78)"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+
+  tq.push({str:"ENTER YOUR NAME", x:VIEW_W/2, y:30, size:10, color:"#ffd93d"});
+
+  // name display box with blinking cursor
+  ctx.fillStyle="#1e1a2e"; ctx.fillRect(80,44,160,26);
+  ctx.fillStyle="#6ee74f";
+  ctx.fillRect(80,44,160,2); ctx.fillRect(80,68,160,2);
+  ctx.fillRect(80,44,2,26); ctx.fillRect(238,44,2,26);
+  const shown = playerName + ((frame%50<28 && playerName.length<8)? "_":"");
+  tq.push({str: shown||"_", x:VIEW_W/2, y:62, size:9, color:"#ffffff"});
+
+  // hero preview next to the box
+  ctx.drawImage(heroFrames[Math.floor(frame/20)%2], 56, 48);
+
+  // on-screen keyboard grid
+  for(let r=0;r<KB.rows;r++)for(let c=0;c<KB.cols;c++){
+    const i=r*KB.cols+c;
+    const kx=KB.x0+c*KB.kw, ky=KB.y0+r*KB.kh;
+    let label, w=KB.kw;
+    if(i<36) label=NAME_CHARS[i];
+    else if(i===36){ label="DEL"; w=KB.kw*2; }
+    else if(i===38){ label="OK"; w=KB.kw*2; }
+    else continue;
+    const isOk=(label==="OK"), isDel=(label==="DEL");
+    ctx.fillStyle = isOk? "#1c4a24" : isDel? "#4a1c1c" : "#2b2640";
+    ctx.fillRect(kx+2,ky+2,w-4,KB.kh-4);
+    ctx.fillStyle = isOk? "#6ee74f" : isDel? "#e8433f" : "#4d4468";
+    ctx.fillRect(kx+2,ky+2,w-4,1); ctx.fillRect(kx+2,ky+KB.kh-3,w-4,1);
+    ctx.fillRect(kx+2,ky+2,1,KB.kh-4); ctx.fillRect(kx+w-3,ky+2,1,KB.kh-4);
+    tq.push({str:label, x:kx+w/2, y:ky+KB.kh/2+3, size: i<36?7:6,
+             color: isOk? "#6ee74f" : isDel? "#ff6b6b" : "#cfcfe8"});
+  }
+
+  tq.push({str: deviceMode==="mobile" ? "Tap letters, then OK" : "Type your name, ENTER to confirm",
+           x:VIEW_W/2, y:216, size:6, color:"#8ef0ff"});
+  if(playerName==="")
+    tq.push({str:"(empty = HERO)", x:VIEW_W/2, y:230, size:5, color:"#7a7494"});
+}
+
+/* --- leaderboard screen: top 10 highest scores --- */
+function renderBoard(tq){
+  for(let y=0;y<VIEW_H/TILE+1;y++)for(let x=0;x<VIEW_W/TILE+1;x++)
+    ctx.drawImage(FLOOR_VARS[hash2(x+5,y+7)%6],x*TILE,y*TILE);
+  ctx.fillStyle="rgba(8,6,16,.82)"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+
+  // trophy pixel icon
+  ctx.fillStyle="#ffd93d";
+  ctx.fillRect(148,10,24,10); ctx.fillRect(152,20,16,4); ctx.fillRect(156,24,8,4);
+  ctx.fillRect(144,10,4,6); ctx.fillRect(172,10,4,6);
+  ctx.fillStyle="#e0b322"; ctx.fillRect(152,28,16,3);
+
+  tq.push({str:"LEADERBOARD - TOP 10", x:VIEW_W/2, y:46, size:9, color:"#ffd93d"});
+
+  if(leaderboard.length===0){
+    tq.push({str:"No runs yet...", x:VIEW_W/2, y:110, size:7, color:"#9a94b8"});
+    tq.push({str:"Be the first hero!", x:VIEW_W/2, y:126, size:7, color:"#6ee74f"});
+  } else {
+    for(let i=0;i<10;i++){
+      const y=62+i*15;
+      const e=leaderboard[i];
+      const isNew = (i===lastRank);
+      if(isNew && frame%30<20){ ctx.fillStyle="rgba(110,231,79,.14)"; ctx.fillRect(16,y-10,288,14); }
+      const rankCol = i===0? "#ffd93d" : i===1? "#c0c0d8" : i===2? "#cd7f32" : "#7a7494";
+      if(!e){
+        tq.push({str:`${i+1}.`, x:24, y, size:6, color:"#4a4462", align:"left"});
+        tq.push({str:"---", x:60, y, size:6, color:"#4a4462", align:"left"});
+        continue;
+      }
+      tq.push({str:`${i+1}.`, x:24, y, size:6, color:rankCol, align:"left"});
+      tq.push({str:e.name.slice(0,8), x:48, y, size:6, color: isNew? "#6ee74f":"#ffffff", align:"left"});
+      tq.push({str:`${e.score}`, x:210, y, size:6, color: isNew? "#6ee74f":"#8ef0ff", align:"right"});
+      tq.push({str:`F${e.floor}${e.win?"*":""}`, x:246, y, size:6, color:"#9a94b8", align:"right"});
+      tq.push({str:e.mode==="endless"?"END":"NOR", x:296, y, size:5, color: e.mode==="endless"? "#c05ce0":"#4ea5ff", align:"right"});
+    }
+  }
+  if(lastRank>=0)
+    tq.push({str:`YOU RANKED #${lastRank+1}!`, x:VIEW_W/2, y:220, size:7, color:"#6ee74f"});
+  if(frame%60<40)
+    tq.push({str:"- PRESS SPACE OR TAP -", x:VIEW_W/2, y:234, size:6, color:"#ffffff"});
+}
+
 /* --- mode selection screen --- */
 function renderMode(tq){
   for(let y=0;y<VIEW_H/TILE+1;y++)for(let x=0;x<VIEW_W/TILE+1;x++)
@@ -1518,7 +1889,7 @@ function renderMode(tq){
   tq.push({str:"+1 HP every 3 floors", x:232, y:166, size:5, color:"#9a94b8"});
 
   if(best.floor>0)
-    tq.push({str:`ENDLESS BEST: floor ${best.floor}  •  ${best.score} pts`, x:VIEW_W/2, y:206, size:6, color:"#c05ce0"});
+    tq.push({str:`ENDLESS BEST: ${best.name||"???"} — floor ${best.floor} • ${best.score} pts`, x:VIEW_W/2, y:206, size:6, color:"#c05ce0"});
   tq.push({str:"Tap a box  /  Arrows + SPACE  /  press 1 or 2", x:VIEW_W/2, y:224, size:6, color:"#8ef0ff"});
 }
 
@@ -1547,6 +1918,12 @@ function renderTitle(tq){
 
   tq.push({str:"VEGGIE ESCAPE", x:VIEW_W/2, y:58, size:16, color:"#6ee74f"});
   tq.push({str:"~ Junk Food Dungeon ~", x:VIEW_W/2, y:76, size:7, color:"#ffd93d"});
+  if(playerName) tq.push({str:"Player: "+playerName, x:VIEW_W/2, y:88, size:6, color:"#6ee74f"});
+  // leaderboard corner button
+  ctx.fillStyle="rgba(30,26,46,.8)"; ctx.fillRect(VIEW_W-84,8,76,22);
+  ctx.fillStyle="#ffd93d"; ctx.fillRect(VIEW_W-84,8,76,1); ctx.fillRect(VIEW_W-84,29,76,1);
+  ctx.fillRect(VIEW_W-84,8,1,22); ctx.fillRect(VIEW_W-9,8,1,22);
+  tq.push({str:"RANKS", x:VIEW_W-46, y:22, size:6, color:"#ffd93d"});
   tq.push({str:"The junk food is hungry... for YOU!", x:VIEW_W/2, y:98, size:6, color:"#cfcfe8"});
   tq.push({str:"Grab every fruit & veggie on each floor,", x:VIEW_W/2, y:110, size:6, color:"#cfcfe8"});
   tq.push({str:"then escape down the stairs. DON'T FIGHT - RUN!", x:VIEW_W/2, y:122, size:6, color:"#cfcfe8"});
@@ -1563,6 +1940,10 @@ if(document.fonts && document.fonts.load){
 }
 let lastJoyState=null;
 function syncJoyLayer(){
+  // menu button visible only during play & pause
+  const showMenu = (game.state==="play"||game.state==="pause");
+  if(menuBtn.style.display !== (showMenu?"block":"none"))
+    menuBtn.style.display = showMenu? "block":"none";
   if(deviceMode!=="mobile") return;
   const inPlay = (game.state==="play");
   if(inPlay===lastJoyState) return;
@@ -1572,13 +1953,21 @@ function syncJoyLayer(){
   joyBase.style.opacity     = inPlay ? "" : "0";
   if(!inPlay) joyReset();
 }
+/* keep the right music playing for the current screen */
+function syncMusic(){
+  if(!AudioSys.started) return;
+  if(game.state==="play") AudioSys.playMusic("dungeon");
+  else if(game.state==="gameover"||game.state==="win") AudioSys.playMusic(null);
+  else AudioSys.playMusic("menu");
+}
 function loop(){
   update();
   syncJoyLayer();
+  syncMusic();
   render();
   requestAnimationFrame(loop);
 }
 loop();
 </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1f7ddec7903b92e',t:'MTc4NDc4MDE1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1f8f3813eedaaa3',t:'MTc4NDc5MTUyNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
