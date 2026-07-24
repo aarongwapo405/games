@@ -359,6 +359,8 @@ addEventListener("keydown", e=>{
     return;
   }
   if(k==="l" && (game.state==="title"||game.state==="mode")){ lastRank=-1; game.state="board"; refreshOnlineBoard(boardTab,false); SFX.select(); return; }
+  if(k==="c" && (game.state==="title"||game.state==="mode")){ game.state="credits"; SFX.select(); return; }
+  if(game.state==="credits"){ if(k===" "||k==="enter"||k==="escape"){ game.state="title"; SFX.select(); } return; }
   if(k==="escape"){
     if(game.state==="play") openPause();
     else if(game.state==="pause") { game.state="play"; SFX.select(); }
@@ -436,8 +438,10 @@ canvas.addEventListener("pointerdown", e=>{
   if(game.state==="title"){
     const p=canvasPos(e);
     if(p.y<40 && p.x>VIEW_W-90){ lastRank=-1; game.state="board"; refreshOnlineBoard(boardTab,false); SFX.select(); return; }
+    if(p.y<40 && p.x<90){ game.state="credits"; SFX.select(); return; }
     advance(); return;
   }
+  if(game.state==="credits"){ game.state="title"; SFX.select(); return; }
   if(game.state==="pause"){
     const p=canvasPos(e);
     // menu item boxes: centered, starting y=96, 26px apart, 160 wide
@@ -1196,7 +1200,7 @@ function bfsMap(g, sx, sy){
 /* ---------------- GAME STATE ---------------- */
 const MAX_FLOOR = 10;
 const game = {
-  state:"device",   // device | name | title | mode | hero | play | pause | floorclear | gameover | win | board
+  state:"device",   // device | name | title | mode | hero | play | pause | floorclear | gameover | win | board | credits
   mode:"normal",    // normal | endless
   floor:1, score:0, hp:3, maxHp:3,
   timeOnFloor:0,
@@ -1695,6 +1699,7 @@ function render(){
   if(game.state==="device"){ renderDevice(tq); flip(tq); return; }
   if(game.state==="name"){ renderName(tq); flip(tq); return; }
   if(game.state==="board"){ renderBoard(tq); flip(tq); return; }
+  if(game.state==="credits"){ renderCredits(tq); flip(tq); return; }
   if(game.state==="title"){ renderTitle(tq); flip(tq); return; }
   if(game.state==="mode"){ renderMode(tq); flip(tq); return; }
   if(game.state==="hero"){ renderHero(tq); flip(tq); return; }
@@ -2079,6 +2084,41 @@ function renderName(tq){
     tq.push({str:"(empty = HERO)", x:VIEW_W/2, y:230, size:5, color:"#7a7494"});
 }
 
+/* --- credits screen --- */
+function renderCredits(tq){
+  for(let y=0;y<VIEW_H/TILE+1;y++)for(let x=0;x<VIEW_W/TILE+1;x++)
+    ctx.drawImage(FLOOR_VARS[hash2(x+21,y+8)%6],x*TILE,y*TILE);
+  ctx.fillStyle="rgba(8,6,16,.82)"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+
+  const t=frame*0.05;
+  tq.push({str:"CREDITS", x:VIEW_W/2, y:36, size:12, color:"#ffd93d"});
+
+  // hero trio taking a bow
+  for(let i=0;i<3;i++){
+    const bob=Math.sin(t*1.4+i*0.9)*3;
+    ctx.drawImage(HEROES[i].frames[Math.floor(frame/12+i)%2], 118+i*30, 48+bob, 24, 28);
+  }
+
+  tq.push({str:"GAME DEVELOPER", x:VIEW_W/2, y:104, size:6, color:"#8ef0ff"});
+  tq.push({str:"AARON JOSHUA N. DAYO", x:VIEW_W/2, y:122, size:9, color:"#6ee74f"});
+
+  tq.push({str:"DESIGN - CODE - PIXEL ART - MUSIC", x:VIEW_W/2, y:142, size:5, color:"#9a94b8"});
+
+  tq.push({str:"Made in Digos City, Philippines", x:VIEW_W/2, y:162, size:5, color:"#cfcfe8"});
+  tq.push({str:"(c) 2026 Veggie Escape", x:VIEW_W/2, y:176, size:5, color:"#7a7494"});
+
+  // junk food parade at the bottom
+  const foes=[sprBurger,sprFries,sprDonut,sprPizza,sprHotdog,sprSoda];
+  for(let i=0;i<6;i++){
+    const fx=((frame*0.5 + i*56)%(VIEW_W+40))-30;
+    ctx.drawImage(foes[i][Math.floor(frame/10+i)%2], fx, 192+Math.sin(t+i)*2);
+  }
+
+  tq.push({str:"Thanks for playing!", x:VIEW_W/2, y:224, size:6, color:"#ffd93d"});
+  if(frame%60<40)
+    tq.push({str:"- PRESS SPACE OR TAP TO GO BACK -", x:VIEW_W/2, y:236, size:5, color:"#ffffff"});
+}
+
 /* --- leaderboard screen: separate Top 10 per mode (GLOBAL, all devices) --- */
 function renderBoard(tq){
   refreshOnlineBoard(boardTab,false);
@@ -2205,6 +2245,11 @@ function renderTitle(tq){
   ctx.fillStyle="#ffd93d"; ctx.fillRect(VIEW_W-84,8,76,1); ctx.fillRect(VIEW_W-84,29,76,1);
   ctx.fillRect(VIEW_W-84,8,1,22); ctx.fillRect(VIEW_W-9,8,1,22);
   tq.push({str:"RANKS", x:VIEW_W-46, y:22, size:6, color:"#ffd93d"});
+  // credits corner button
+  ctx.fillStyle="rgba(30,26,46,.8)"; ctx.fillRect(8,8,76,22);
+  ctx.fillStyle="#8ef0ff"; ctx.fillRect(8,8,76,1); ctx.fillRect(8,29,76,1);
+  ctx.fillRect(8,8,1,22); ctx.fillRect(83,8,1,22);
+  tq.push({str:"CREDITS", x:46, y:22, size:6, color:"#8ef0ff"});
   tq.push({str:"The junk food is hungry... for YOU!", x:VIEW_W/2, y:98, size:6, color:"#cfcfe8"});
   tq.push({str:"Grab every fruit & veggie on each floor,", x:VIEW_W/2, y:110, size:6, color:"#cfcfe8"});
   tq.push({str:"then escape down the stairs. DON'T FIGHT - RUN!", x:VIEW_W/2, y:122, size:6, color:"#cfcfe8"});
@@ -2213,6 +2258,7 @@ function renderTitle(tq){
   if(frame%60<40){
     tq.push({str:"- PRESS SPACE OR TAP TO START -", x:VIEW_W/2, y:228, size:7, color:"#ffffff"});
   }
+  tq.push({str:"a game by AARON JOSHUA N. DAYO", x:VIEW_W/2, y:238, size:5, color:"#7a7494"});
 }
 
 /* ---------------- MAIN LOOP ---------------- */
@@ -2251,5 +2297,5 @@ function loop(){
 }
 loop();
 </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1ff5c946c5db67d',t:'MTc4NDg1ODc0NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2003821eb7abdab',t:'MTc4NDg2NzczNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
