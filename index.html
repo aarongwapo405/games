@@ -254,6 +254,8 @@ const AudioSys = (()=>{
     select(){ tone({freq:880,dur:0.06,vol:0.35}); tone({freq:1174,dur:0.08,vol:0.3,delay:0.05}); },
     alert(){ tone({freq:1200,type:"square",dur:0.07,vol:0.22}); tone({freq:1600,dur:0.07,vol:0.18,delay:0.06}); },
     step(){ tone({freq:180,noise:true,dur:0.045,vol:0.10}); },
+    slam(){ tone({freq:70,type:"sawtooth",dur:0.5,vol:0.7,slide:-40}); tone({freq:300,noise:true,dur:0.4,vol:0.5}); tone({freq:1200,noise:true,dur:0.12,vol:0.3,delay:0.02}); },
+    creak(){ tone({freq:90,type:"sawtooth",dur:0.7,vol:0.25,slide:50}); },
   };
 
   /* --- music: sequenced chiptune loops --- */
@@ -361,6 +363,7 @@ addEventListener("keydown", e=>{
   if(k==="l" && (game.state==="title"||game.state==="mode")){ lastRank=-1; game.state="board"; refreshOnlineBoard(boardTab,false); SFX.select(); return; }
   if(k==="c" && (game.state==="title"||game.state==="mode")){ game.state="credits"; SFX.select(); return; }
   if(game.state==="credits"){ if(k===" "||k==="enter"||k==="escape"){ game.state="title"; SFX.select(); } return; }
+  if(game.state==="intro"){ if(k===" "||k==="enter"||k==="escape"){ skipIntro(); } return; }
   if(k==="escape"){
     if(game.state==="play") openPause();
     else if(game.state==="pause") { game.state="play"; SFX.select(); }
@@ -442,6 +445,7 @@ canvas.addEventListener("pointerdown", e=>{
     advance(); return;
   }
   if(game.state==="credits"){ game.state="title"; SFX.select(); return; }
+  if(game.state==="intro"){ skipIntro(); return; }
   if(game.state==="pause"){
     const p=canvasPos(e);
     // menu item boxes: centered, starting y=96, 26px apart, 160 wide
@@ -1200,12 +1204,14 @@ function bfsMap(g, sx, sy){
 /* ---------------- GAME STATE ---------------- */
 const MAX_FLOOR = 10;
 const game = {
-  state:"device",   // device | name | title | mode | hero | play | pause | floorclear | gameover | win | board | credits
+  state:"device",   // device | name | title | mode | hero | intro | play | pause | floorclear | gameover | win | board | credits
   mode:"normal",    // normal | endless
   floor:1, score:0, hp:3, maxHp:3,
   timeOnFloor:0,
 };
 let modeSel = 0;
+/* intro cutscene timers */
+let introT = 0, introSlammed = false;
 /* pause menu */
 let pauseSel = 0;
 const PAUSE_ITEMS = ["RESUME","RESTART RUN","LEADERBOARD","QUIT TO TITLE"];
@@ -1401,8 +1407,9 @@ function startFloor(n){
       wx:x, wy:y, path:[], repath:0,
       // gentle scaling: +2% speed per floor (max +24%),
       // sight grows just +0.1 tile per floor (max +1.2)
+      // Normal mode: eyes are a bit weaker (-0.8 tiles) than Endless
       speed:t.speed*(1+Math.min(0.24, n*0.02)),
-      sight:t.sight+Math.min(1.2, n*0.1),
+      sight:t.sight+Math.min(1.2, n*0.1)-(game.mode==="normal"?0.8:0),
       alert:0,
     });
   }
@@ -1450,11 +1457,14 @@ function beginRun(){
   game.state="name";
 }
 function launchRun(){
-  game.state="play";
   game.score=0; game.hp=game.maxHp=3;
   SFX.select();
   startFloor(1);
+  // play the intro cutscene: hero gets locked into the dungeon!
+  introT=0; introSlammed=false;
+  game.state="intro";
 }
+function skipIntro(){ if(game.state==="intro"){ game.state="play"; } }
 function advance(){
   if(game.state==="title"){ game.state="mode"; SFX.select(); }
   else if(game.state==="floorclear"){
@@ -1700,6 +1710,7 @@ function render(){
   if(game.state==="name"){ renderName(tq); flip(tq); return; }
   if(game.state==="board"){ renderBoard(tq); flip(tq); return; }
   if(game.state==="credits"){ renderCredits(tq); flip(tq); return; }
+  if(game.state==="intro"){ renderIntro(tq); flip(tq); return; }
   if(game.state==="title"){ renderTitle(tq); flip(tq); return; }
   if(game.state==="mode"){ renderMode(tq); flip(tq); return; }
   if(game.state==="hero"){ renderHero(tq); flip(tq); return; }
@@ -2084,6 +2095,136 @@ function renderName(tq){
     tq.push({str:"(empty = HERO)", x:VIEW_W/2, y:230, size:5, color:"#7a7494"});
 }
 
+/* --- intro cutscene: the chosen hero gets locked into the dungeon ---
+   Timeline (60fps):
+   0-100    hero walks right toward the dungeon gate
+   100-150  hero stops, looks at the dark doorway
+   150-165  hero steps inside (fades into darkness)
+   165-185  the iron gate SLAMS down (screen shake)
+   185-260  junk food eyes light up around... "ESCAPE!"
+   260+     auto-start floor 1 */
+const INTRO_LEN = 275;
+function renderIntro(tq){
+  introT++;
+  if(introT>=INTRO_LEN){ game.state="play"; return; }
+  const T=introT;
+
+  // night sky backdrop
+  ctx.fillStyle="#0a0814"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+  // stars
+  for(let i=0;i<26;i++){
+    const sx=(i*67)%VIEW_W, sy=(i*41)%90;
+    ctx.fillStyle = (i+Math.floor(frame/30))%5? "#3d3654":"#8ef0ff";
+    ctx.fillRect(sx,sy,1,1);
+  }
+  // moon
+  ctx.fillStyle="#e8e8f0"; ctx.beginPath(); ctx.arc(268,34,14,0,6.29); ctx.fill();
+  ctx.fillStyle="#c9c9d8"; ctx.fillRect(262,28,4,3); ctx.fillRect(270,38,5,3);
+  ctx.fillStyle="#0a0814"; ctx.beginPath(); ctx.arc(262,30,11,0,6.29); ctx.fill();
+
+  // ground
+  ctx.fillStyle="#171226"; ctx.fillRect(0,170,VIEW_W,70);
+  ctx.fillStyle="#1e1a2e"; for(let i=0;i<20;i++) ctx.fillRect(i*18,170,9,2);
+
+  // dungeon front wall (right side)
+  const gateX=214;
+  ctx.fillStyle="#2b2640"; ctx.fillRect(gateX-6,60,VIEW_W-gateX+6,112);
+  for(let y=0;y<7;y++)for(let x=0;x<8;x++){
+    ctx.fillStyle=(x+y)%2? "#332c4b":"#2e2947";
+    ctx.fillRect(gateX-6+x*16, 60+y*16, 15, 15);
+  }
+  // battlements
+  for(let i=0;i<6;i++){ ctx.fillStyle="#3b3352"; ctx.fillRect(gateX-6+i*20,50,12,12); }
+  // doorway (dark arch)
+  ctx.fillStyle="#000"; ctx.fillRect(gateX+10,96,44,76);
+  ctx.fillStyle="#0d0b14"; ctx.fillRect(gateX+14,90,36,8);
+  // torches by the door
+  const tf=Math.floor(frame/6)%3;
+  ctx.drawImage(torchSprs[tf], gateX+2, 100);
+  ctx.drawImage(torchSprs[(tf+1)%3], gateX+56, 100);
+  // torch glow
+  ctx.globalAlpha=0.15+Math.sin(frame*0.3)*0.05;
+  ctx.fillStyle="#ff9d2e";
+  ctx.beginPath(); ctx.arc(gateX+5,104,18,0,6.29); ctx.fill();
+  ctx.beginPath(); ctx.arc(gateX+59,104,18,0,6.29); ctx.fill();
+  ctx.globalAlpha=1;
+
+  // sign above door
+  ctx.fillStyle="#5a3418"; ctx.fillRect(gateX+8,72,48,14);
+  ctx.fillStyle="#7c4a24"; ctx.fillRect(gateX+9,73,46,12);
+  tq.push({str:"DUNGEON", x:gateX+32, y:82, size:5, color:"#ffd93d"});
+
+  /* --- hero movement --- */
+  const heroSpr=HEROES[heroSel].frames;
+  let hx, walking=false, visible=true;
+  if(T<100){ hx=-20+(T/100)*(gateX+18+20); walking=true; }        // approach
+  else if(T<150){ hx=gateX+18; walking=false; }                    // pause at door
+  else if(T<165){ hx=gateX+18+((T-150)/15)*16; walking=true; }     // step inside
+  else visible=false;                                              // swallowed by dark
+  if(visible){
+    const f=walking? heroSpr[Math.floor(frame/7)%2] : heroSpr[0];
+    const fade = T>=150? 1-(T-150)/15 : 1;
+    ctx.globalAlpha=fade;
+    ctx.drawImage(f, Math.floor(hx), 146, 24, 28);
+    ctx.globalAlpha=1;
+    if(walking && frame%12===0) SFX.step();
+  }
+  // hero's "!" when pausing at the door
+  if(T>=110 && T<145 && frame%20<12)
+    tq.push({str:"?", x:hx+12, y:138, size:7, color:"#8ef0ff"});
+
+  /* --- the gate slams --- */
+  if(T>=165){
+    const drop=Math.min(1,(T-165)/12);
+    const gy=96-76+drop*76; // slides down over the arch
+    // portcullis bars
+    ctx.fillStyle="#454057";
+    for(let b=0;b<5;b++) ctx.fillRect(gateX+12+b*9, 96, 4, drop*76);
+    for(let b=0;b<4;b++) ctx.fillRect(gateX+10, 96+14+b*18*drop, 44, 3);
+    if(!introSlammed && drop>=1){
+      introSlammed=true; SFX.slam();
+    }
+    // impact flash + dust puffs right after the slam
+    if(introSlammed && T<180){
+      ctx.globalAlpha=(180-T)/15*0.35;
+      ctx.fillStyle="#fff"; ctx.fillRect(gateX+8,90,50,84);
+      ctx.globalAlpha=1;
+      ctx.fillStyle="#9a94b8";
+      for(let d=0;d<5;d++){
+        const dp=(T-165-12)+d;
+        ctx.fillRect(gateX+6+d*11, 170-dp, 2,2);
+      }
+    }
+  }
+
+  /* --- aftermath: eyes + text --- */
+  if(T>=185){
+    const p=(T-185)/75;
+    // junk food eyes glowing in the doorway dark
+    const eyes=[[gateX+20,120],[gateX+38,132],[gateX+30,148],[gateX+46,114]];
+    for(let i=0;i<eyes.length;i++){
+      if(p>i*0.15 && frame%40>6){
+        ctx.fillStyle= i%2? "#ff5555":"#ffd93d";
+        ctx.fillRect(eyes[i][0],eyes[i][1],3,3);
+        ctx.fillRect(eyes[i][0]+7,eyes[i][1],3,3);
+      }
+    }
+    tq.push({str:`${playerName||"HERO"} IS TRAPPED!`, x:VIEW_W/2, y:52, size:8, color:"#e8433f", alpha:Math.min(1,p*2)});
+    if(p>0.35)
+      tq.push({str:"Collect the veggies...", x:VIEW_W/2, y:196, size:6, color:"#6ee74f", alpha:Math.min(1,(p-0.35)*3)});
+    if(p>0.6)
+      tq.push({str:"...and ESCAPE!", x:VIEW_W/2, y:212, size:7, color:"#ffd93d", alpha:Math.min(1,(p-0.6)*3)});
+  }
+
+  // skip hint
+  if(frame%60<40)
+    tq.push({str:"SPACE / TAP TO SKIP", x:VIEW_W-8, y:236, size:4, color:"#7a7494", align:"right"});
+
+  // letterbox bars (cinematic)
+  ctx.fillStyle="#000";
+  ctx.fillRect(0,0,VIEW_W,14); ctx.fillRect(0,VIEW_H-14,VIEW_W,14);
+}
+
 /* --- credits screen --- */
 function renderCredits(tq){
   for(let y=0;y<VIEW_H/TILE+1;y++)for(let x=0;x<VIEW_W/TILE+1;x++)
@@ -2104,8 +2245,10 @@ function renderCredits(tq){
 
   tq.push({str:"DESIGN - CODE - PIXEL ART - MUSIC", x:VIEW_W/2, y:142, size:5, color:"#9a94b8"});
 
-  tq.push({str:"Made in Digos City, Philippines", x:VIEW_W/2, y:162, size:5, color:"#cfcfe8"});
-  tq.push({str:"(c) 2026 Veggie Escape", x:VIEW_W/2, y:176, size:5, color:"#7a7494"});
+  tq.push({str:"with the help of ARENA AI", x:VIEW_W/2, y:158, size:6, color:"#c05ce0"});
+
+  tq.push({str:"Made in Digos City, Philippines", x:VIEW_W/2, y:174, size:5, color:"#cfcfe8"});
+  tq.push({str:"(c) 2026 Veggie Escape", x:VIEW_W/2, y:186, size:5, color:"#7a7494"});
 
   // junk food parade at the bottom
   const foes=[sprBurger,sprFries,sprDonut,sprPizza,sprHotdog,sprSoda];
@@ -2297,5 +2440,5 @@ function loop(){
 }
 loop();
 </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2003821eb7abdab',t:'MTc4NDg2NzczNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a200ab3bbbf91ff9',t:'MTc4NDg3MjQ1Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
