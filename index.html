@@ -371,9 +371,21 @@ addEventListener("keydown", e=>{
     return;
   }
   if(game.state==="pause"){
-    if(k==="arrowup"||k==="w"){ pauseSel=(pauseSel+PAUSE_ITEMS.length-1)%PAUSE_ITEMS.length; SFX.select(); }
-    else if(k==="arrowdown"||k==="s"){ pauseSel=(pauseSel+1)%PAUSE_ITEMS.length; SFX.select(); }
+    if(k==="arrowup"||k==="w"){ pauseSel=(pauseSel+getPauseItems().length-1)%getPauseItems().length; SFX.select(); }
+    else if(k==="arrowdown"||k==="s"){ pauseSel=(pauseSel+1)%getPauseItems().length; SFX.select(); }
     else if(k===" "||k==="enter"){ pauseAction(pauseSel); }
+    return;
+  }
+  if(game.state==="cheat"){
+    if(k>="0"&&k<="9"&&cheatCode.length<4){
+      cheatCode+=k; cheatWrong=0; SFX.select();
+      if(cheatCode.length===4){
+        if(cheatCode===DEV_PASS){ devUnlocked=true; SFX.win(); game.state="pause"; pauseSel=4; }
+        else { cheatWrong=1; cheatCode=""; SFX.hurt(); }
+      }
+    }
+    else if(k==="backspace"){ cheatCode=cheatCode.slice(0,-1); }
+    else if(k==="escape"){ game.state="pause"; }
     return;
   }
   if(game.state==="board"){
@@ -451,9 +463,9 @@ canvas.addEventListener("pointerdown", e=>{
   if(game.state==="pause"){
     const p=canvasPos(e);
     // menu item boxes: centered, starting y=96, 26px apart, 160 wide
-    for(let i=0;i<PAUSE_ITEMS.length;i++){
-      const iy=96+i*28;
-      if(p.x>80 && p.x<240 && p.y>iy-12 && p.y<iy+12){ pauseAction(i); return; }
+    for(let i=0;i<getPauseItems().length;i++){
+      const iy=92+i*26;
+      if(p.x>80 && p.x<240 && p.y>iy-11 && p.y<iy+11){ pauseAction(i); return; }
     }
     return;
   }
@@ -467,6 +479,28 @@ canvas.addEventListener("pointerdown", e=>{
     }
     if(game.fromPause){ game.fromPause=false; game.state="pause"; SFX.select(); return; }
     advance(); return;
+  }
+  if(game.state==="cheat"){
+    const p=canvasPos(e);
+    // number pad grid: keys at x=60+c*42 (36 wide), y=146+r*34 (28 tall)
+    for(let r=0;r<2;r++)for(let c=0;c<5;c++){
+      const kx=60+c*42, ky=146+r*34;
+      if(p.x>=kx&&p.x<=kx+36&&p.y>=ky&&p.y<=ky+28){
+        const d=String(r*5+c);
+        if(cheatCode.length<4){
+          cheatCode+=d; cheatWrong=0; SFX.select();
+          if(cheatCode.length===4){
+            if(cheatCode===DEV_PASS){ devUnlocked=true; SFX.win(); game.state="pause"; pauseSel=4; }
+            else { cheatWrong=1; cheatCode=""; SFX.hurt(); }
+          }
+        }
+        return;
+      }
+    }
+    // tap the passcode box = backspace; tap elsewhere = cancel
+    if(p.x>110&&p.x<210&&p.y>92&&p.y<118){ cheatCode=cheatCode.slice(0,-1); return; }
+    game.state="pause"; SFX.select();
+    return;
   }
   if(game.state!=="play") advance();
 });
@@ -1206,7 +1240,7 @@ function bfsMap(g, sx, sy){
 /* ---------------- GAME STATE ---------------- */
 const MAX_FLOOR = 5;
 const game = {
-  state:"device",   // device | name | title | mode | hero | intro | play | pause | floorclear | gameover | win | board | credits | outro
+  state:"device",   // device | name | title | mode | hero | intro | play | pause | cheat | floorclear | gameover | win | board | credits | outro
   mode:"normal",    // normal | endless
   floor:1, score:0, hp:3, maxHp:3,
   timeOnFloor:0,
@@ -1218,7 +1252,20 @@ let introT = 0, introSlammed = false;
 let outroT = 0, outroGate = false;
 /* pause menu */
 let pauseSel = 0;
-const PAUSE_ITEMS = ["RESUME","RESTART RUN","LEADERBOARD","QUIT TO TITLE"];
+/* --- developer cheat (passcode protected) --- */
+const DEV_PASS = "2611";          // <-- developer passcode (change it here!)
+let devUnlocked = false;          // unlocked for this session only
+let cheatCode = "", cheatWrong = 0;
+function getPauseItems(){
+  return ["RESUME","RESTART RUN","LEADERBOARD","QUIT TO TITLE",
+          devUnlocked? "DEV: SKIP FLOOR" : "DEV MODE"];
+}
+function devSkipFloor(){
+  game.cheated = true;            // cheated runs never touch the leaderboard
+  game.lastBonus = 0; game.lastHeal = false;
+  SFX.floorClear();
+  game.state = "floorclear";      // reuses the normal floor-clear flow
+}
 function openPause(){ if(game.state==="play"){ game.state="pause"; pauseSel=0; SFX.select(); } }
 function pauseAction(i){
   SFX.select();
@@ -1226,6 +1273,10 @@ function pauseAction(i){
   else if(i===1){ launchRun(); }                                     // restart run (same hero & name)
   else if(i===2){ lastRank=-1; game.fromPause=true; boardTab=game.mode; game.state="board"; refreshOnlineBoard(boardTab,false); } // leaderboard
   else if(i===3){ game.state="title"; }                              // quit
+  else if(i===4){                                                    // dev cheat
+    if(devUnlocked){ devSkipFloor(); }
+    else { cheatCode=""; cheatWrong=0; game.state="cheat"; }
+  }
 }
 /* player name (saved in browser) */
 let playerName = "";
@@ -1240,6 +1291,7 @@ function confirmName(){
 let best = {floor:0, score:0, name:""};
 try{ const b=JSON.parse(localStorage.getItem("veggie-best")||"{}"); best.floor=b.floor||0; best.score=b.score||0; best.name=b.name||""; }catch(e){}
 function saveBest(){
+  if(game.cheated) return false;
   let changed=false;
   if(game.floor>best.floor){ best.floor=game.floor; changed=true; }
   if(game.score>best.score){ best.score=game.score; changed=true; }
@@ -1312,6 +1364,7 @@ let leaderboard = [];
 try{ leaderboard = JSON.parse(localStorage.getItem("veggie-lb")||"[]"); if(!Array.isArray(leaderboard)) leaderboard=[]; }catch(e){}
 let lastRank = -1;   // rank of the most recent run (for highlight), -1 = not placed
 function addToLeaderboard(){
+  if(game.cheated) return;   // dev-cheated runs never rank
   const entry={ name:playerName||"HERO", score:game.score, floor:game.floor,
                 mode:game.mode, win:!!game.won };
   leaderboard.push(entry);
@@ -1462,7 +1515,7 @@ function beginRun(){
 }
 function launchRun(){
   game.score=0; game.hp=game.maxHp=3;
-  game.won=false;
+  game.won=false; game.cheated=false;
   SFX.select();
   startFloor(1);
   // play the intro cutscene: hero gets locked into the dungeon!
@@ -1913,24 +1966,57 @@ function render(){
 
   if(game.state==="pause"){
     ctx.fillStyle="rgba(10,8,18,.85)"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
-    tq.push({str:"|| PAUSED", x:VIEW_W/2, y:56, size:11, color:"#ffd93d"});
-    tq.push({str:`${playerName||"HERO"} — Floor ${game.floor} — ${game.score} pts`, x:VIEW_W/2, y:74, size:6, color:"#9a94b8"});
-    for(let i=0;i<PAUSE_ITEMS.length;i++){
-      const iy=96+i*28;
+    tq.push({str:"|| PAUSED", x:VIEW_W/2, y:52, size:11, color:"#ffd93d"});
+    tq.push({str:`${playerName||"HERO"} — Floor ${game.floor} — ${game.score} pts`, x:VIEW_W/2, y:70, size:6, color:"#9a94b8"});
+    const items=getPauseItems();
+    for(let i=0;i<items.length;i++){
+      const iy=92+i*26;
       const sel=(i===pauseSel);
+      const isDev=(i===4);
       // item panel
       ctx.fillStyle= sel? "#2e2745" : "#1e1a2e";
-      ctx.fillRect(80,iy-12,160,24);
-      ctx.fillStyle= sel? "#6ee74f" : "#3d3654";
-      ctx.fillRect(80,iy-12,160,2); ctx.fillRect(80,iy+10,160,2);
-      ctx.fillRect(80,iy-12,2,24); ctx.fillRect(238,iy-12,2,24);
+      ctx.fillRect(80,iy-11,160,22);
+      ctx.fillStyle= sel? (isDev? "#c05ce0":"#6ee74f") : "#3d3654";
+      ctx.fillRect(80,iy-11,160,2); ctx.fillRect(80,iy+9,160,2);
+      ctx.fillRect(80,iy-11,2,22); ctx.fillRect(238,iy-11,2,22);
       if(sel && frame%40<25){
-        ctx.fillStyle="#8ef77a";
+        ctx.fillStyle= isDev? "#d98ef0":"#8ef77a";
         ctx.fillRect(72,iy-3,4,6); ctx.fillRect(244,iy-3,4,6);
       }
-      tq.push({str:PAUSE_ITEMS[i], x:VIEW_W/2, y:iy+3, size:7, color: sel? "#6ee74f":"#cfcfe8"});
+      tq.push({str:items[i], x:VIEW_W/2, y:iy+3, size:7,
+               color: sel? (isDev? "#c05ce0":"#6ee74f") : (isDev? "#7a5a8a":"#cfcfe8")});
     }
-    tq.push({str:"ESC or the corner button to resume", x:VIEW_W/2, y:224, size:5, color:"#7a7494"});
+    if(game.cheated)
+      tq.push({str:"CHEAT ACTIVE - score won't be ranked", x:VIEW_W/2, y:226, size:5, color:"#c05ce0"});
+    else
+      tq.push({str:"ESC or the corner button to resume", x:VIEW_W/2, y:226, size:5, color:"#7a7494"});
+  }
+
+  if(game.state==="cheat"){
+    ctx.fillStyle="rgba(10,8,18,.9)"; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+    tq.push({str:"DEV MODE", x:VIEW_W/2, y:56, size:11, color:"#c05ce0"});
+    tq.push({str:"Developer passcode required", x:VIEW_W/2, y:76, size:6, color:"#9a94b8"});
+    // passcode dots box
+    ctx.fillStyle="#1e1a2e"; ctx.fillRect(110,92,100,26);
+    ctx.fillStyle= cheatWrong>0? "#e8433f":"#c05ce0";
+    ctx.fillRect(110,92,100,2); ctx.fillRect(110,116,100,2);
+    ctx.fillRect(110,92,2,26); ctx.fillRect(208,92,2,26);
+    let dots="";
+    for(let i=0;i<4;i++) dots += i<cheatCode.length? "* " : "_ ";
+    tq.push({str:dots.trim(), x:VIEW_W/2, y:110, size:9, color: cheatWrong>0? "#ff6b6b":"#ffffff"});
+    if(cheatWrong>0)
+      tq.push({str:"WRONG PASSCODE!", x:VIEW_W/2, y:132, size:6, color:"#ff6b6b"});
+    // number pad (tap or type)
+    for(let r=0;r<2;r++)for(let c=0;c<5;c++){
+      const d=r*5+c; // 0..9
+      const kx=60+c*42, ky=146+r*34;
+      ctx.fillStyle="#2b2640"; ctx.fillRect(kx,ky,36,28);
+      ctx.fillStyle="#4d4468";
+      ctx.fillRect(kx,ky,36,1); ctx.fillRect(kx,ky+27,36,1);
+      ctx.fillRect(kx,ky,1,28); ctx.fillRect(kx+35,ky,1,28);
+      tq.push({str:String(d), x:kx+18, y:ky+18, size:8, color:"#cfcfe8"});
+    }
+    tq.push({str:"type 0-9 - BACKSPACE - ESC to cancel", x:VIEW_W/2, y:228, size:5, color:"#7a7494"});
   }
 
   flip(tq);
@@ -2589,5 +2675,5 @@ function loop(){
 }
 loop();
 </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a200db207d7a3c2d',t:'MTc4NDg3NDQxNA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
